@@ -1,5 +1,4 @@
 import unittest
-import random
 import numpy as np
 from tinygrad.device import CompileError, Device, Compiler
 from tinygrad import Tensor
@@ -77,44 +76,47 @@ kernel void r_5(device int* data0, const device int* data1, uint3 gid [[threadgr
     with self.assertRaises(RuntimeError):
       MetalProgram(device, "r_5", compiled)
 
-  def _setup_multi_device_test(self, num_devices=4):
-    devices = tuple(f"METAL:{i}" for i in range(num_devices))
-    random.seed(42)
-    tensors = []
-    for device in devices:
-      t = Tensor.randn(100, 100, device=device)
-      tensors.append(t)
-    results = []
-    for t in tensors:
-      result = t.matmul(t)
-      result.realize()
-      results.append(result)
-    return devices, tensors, results
-
-  def _verify_tensor_transfer(self, transferred, original):
-    self.assertEqual(transferred.shape, original.shape)
-    t_np = transferred.numpy()
-    o_np = original.numpy()
-    self.assertAlmostEqual(float(np.mean(t_np)), float(np.mean(o_np)), delta=1.0)
-    self.assertAlmostEqual(float(np.std(t_np)), float(np.std(o_np)), delta=1.0)
-
   def test_transfer_from_device0_to_all(self):
     NUM_DEVICES = 4
-    devices, _, results = self._setup_multi_device_test(NUM_DEVICES)
+    devices = tuple(f"METAL:{i}" for i in range(NUM_DEVICES))
 
+    # Create a tensor with a known value on device 0
+    original = Tensor.full((10, 10), 42.0, device=devices[0])
+
+    # Transfer to all other devices and verify
     for i in range(1, NUM_DEVICES):
-      transfer = results[0].to(device=devices[i])
+      transfer = original.to(device=devices[i])
       transfer.realize()
-      self._verify_tensor_transfer(transfer, results[0])
+
+      # Verify the transferred tensor has the correct value
+      self.assertEqual(transfer.shape, original.shape)
+      t_np = transfer.numpy()
+      self.assertTrue(np.all(t_np == 42.0),
+                    f"Transfer from {devices[0]} to {devices[i]} failed: "
+                    f"Expected all values to be 42.0")
 
   def test_transfer_from_all_to_device0(self):
     NUM_DEVICES = 4
-    devices, _, results = self._setup_multi_device_test(NUM_DEVICES)
+    devices = tuple(f"METAL:{i}" for i in range(NUM_DEVICES))
 
+    # Create tensors with different known values on each device
+    tensors = []
     for i in range(1, NUM_DEVICES):
-      transfer = results[i].to(device=devices[0])
+      t = Tensor.full((10, 10), float(i*10), device=devices[i])
+      tensors.append(t)
+
+    # Transfer to device 0 and verify
+    for i, original in enumerate(tensors):
+      transfer = original.to(device=devices[0])
       transfer.realize()
-      self._verify_tensor_transfer(transfer, results[i])
+
+      # Verify the transferred tensor has the correct value
+      self.assertEqual(transfer.shape, original.shape)
+      t_np = transfer.numpy()
+      expected_value = float((i+1)*10)
+      self.assertTrue(np.all(t_np == expected_value),
+                    f"Transfer from {devices[i+1]} to {devices[0]} failed: "
+                    f"Expected all values to be {expected_value}")
 
   def test_transfers_between_all_devices(self):
     NUM_DEVICES = 4
